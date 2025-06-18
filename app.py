@@ -6,6 +6,7 @@ from fuzzywuzzy import process
 import requests
 from PIL import Image
 from io import BytesIO
+import random
 
 # ------------------ SETUP ------------------
 st.set_page_config(page_title="Product Recommendation", layout="centered")
@@ -33,13 +34,13 @@ cursor.execute('''CREATE TABLE IF NOT EXISTS tools (
     Category TEXT
 )''')
 
-cursor.execute('''CREATE TABLE IF NOT EXISTS feedback (
+cursor.execute('''CREATE TABLE IF NOT EXISTS q_table (
     userID TEXT,
     toolTitle TEXT,
-    reward INTEGER,
-    PRIMARY KEY (userID, toolTitle)
+    context TEXT,
+    q_value REAL DEFAULT 0,
+    PRIMARY KEY (userID, toolTitle, context)
 )''')
-
 conn.commit()
 
 # ---------- LOAD DATA FROM DATABASE ----------
@@ -68,6 +69,33 @@ def display_resized_image(image_url, max_width=300):
     except:
         st.write("🖼️ Image unavailable")
 
+# ---------- RL FUNCTIONS ----------
+def epsilon_greedy_recommendation(user_id, category, tools_df, epsilon=0.2):
+    available_tools = tools_df[tools_df['Category'].str.lower().str.contains(category.lower())]
+    available_tools = available_tools['Title'].unique().tolist()
+    if not available_tools:
+        return None
+    if random.random() < epsilon:
+        return random.choice(available_tools)
+    q_values = []
+    for tool in available_tools:
+        cursor.execute("SELECT q_value FROM q_table WHERE userID=? AND toolTitle=? AND context=?", 
+                       (user_id, tool, category))
+        row = cursor.fetchone()
+        q = row[0] if row else 0.0
+        q_values.append((tool, q))
+    return max(q_values, key=lambda x: x[1])[0] if q_values else None
+
+def update_q_value(user_id, tool, category, reward, alpha=0.5):
+    cursor.execute("SELECT q_value FROM q_table WHERE userID=? AND toolTitle=? AND context=?", 
+                   (user_id, tool, category))
+    row = cursor.fetchone()
+    old_q = row[0] if row else 0.0
+    new_q = old_q + alpha * (reward - old_q)
+    cursor.execute("INSERT OR REPLACE INTO q_table (userID, toolTitle, context, q_value) VALUES (?, ?, ?, ?)",
+                   (user_id, tool, category, new_q))
+    conn.commit()
+
 # ---------- DATA PIPELINE FUNCTION ----------
 def get_updated_data():
     df, tools_df = load_data_fresh()
@@ -81,56 +109,29 @@ def get_updated_data():
 # ---------- TABS ----------
 tab1, tab2, tab3 = st.tabs(["📊 Recommend Products", "➕ Add New User", "🧠 Content-Based Suggestions"])
 
-# ========== TAB 1: USER-BASED RECOMMENDATION ==========
+# ========== TAB 1: USER-BASED RL RECOMMENDATION ==========
 with tab1:
     df, tools_df, purchase_matrix, sim_df, product_choices = get_updated_data()
-    st.write("## 📌 User-Based Product Recommendations")
+    st.write("## 📌 RL-Based Product Recommendations")
     user_list = list(purchase_matrix.index)
     selected_user = st.selectbox("Select a User ID", user_list)
     custom_user_input = st.text_input("Or enter a User ID manually:", value=selected_user)
 
     if custom_user_input in purchase_matrix.index:
         selected_user = custom_user_input
-        sim_scores = sim_df[selected_user].drop(selected_user)
-        sim_scores = sim_scores[sim_scores > 0]
+        category = df[df['userID'] == selected_user]['category'].values[0]
+        recommended_tool = epsilon_greedy_recommendation(selected_user, category, tools_df)
 
-        if sim_scores.empty:
-            st.write("No similar users found for this user.")
+        if recommended_tool:
+            row = tools_df[tools_df['Title'] == recommended_tool].iloc[0]
+            st.markdown(f"### [{row['Title']}]({row['Title_URL']})")
+            display_resized_image(row['Image'])
+
+            if st.button("👍 Mark as Useful", key=f"{selected_user}_{recommended_tool}"):
+                update_q_value(selected_user, recommended_tool, category, reward=1)
+                st.success("Feedback updated with reward = 1")
         else:
-            weighted_scores = purchase_matrix.loc[sim_scores.index].T.dot(sim_scores)
-            user_vector = purchase_matrix.loc[selected_user]
-            new_scores = weighted_scores[user_vector == 0]
-
-            # 🧠 Reinforcement: Adjust recommendation scores based on user feedback
-            recommendation_scores = []
-            for prod in new_scores.index:
-                cursor.execute("SELECT reward FROM feedback WHERE userID=? AND toolTitle=?", (selected_user, prod))
-                result = cursor.fetchone()
-                reward = result[0] if result else 0
-                adjusted_score = new_scores[prod] + reward
-                recommendation_scores.append((prod, adjusted_score))
-
-            top5 = sorted(recommendation_scores, key=lambda x: x[1], reverse=True)[:5]
-
-            if not top5:
-                st.write("No new product recommendations available for this user.")
-            else:
-                st.subheader("🎯 Top 5 Recommended Products:")
-                for prod, _ in top5:
-                    best_match = find_best_match(prod, product_choices)
-                    if best_match:
-                        row = tools_df[tools_df['Title_clean'] == best_match].iloc[0]
-                        st.markdown(f"### [{prod}]({row['Title_URL']})")
-                        display_resized_image(row['Image'])
-
-                        feedback_key = f"{selected_user}_{prod}"
-                        if st.button("👍 Mark as Useful", key=feedback_key):
-                            cursor.execute("INSERT OR REPLACE INTO feedback (userID, toolTitle, reward) VALUES (?, ?, ?)",
-                                           (selected_user, prod, 1))
-                            conn.commit()
-                            st.success(f"✅ Feedback recorded for '{prod}'!")
-                    else:
-                        st.write(f"- {prod} (No match found)")
+            st.warning("No recommendation available.")
     else:
         st.warning("User ID not found in the dataset.")
 
@@ -158,6 +159,7 @@ with tab2:
 # ========== TAB 3: CONTENT-BASED FILTERING ==========
 with tab3:
     st.write("## 🧠 Content-Based Filtering")
+
     tools_df = load_data_fresh()[1]
     tools_df['Title_clean'] = tools_df['Title'].str.lower().str.strip()
     selected_tool = st.selectbox("🔍 Select a Tool to Find Similar Ones", tools_df['Title'])
