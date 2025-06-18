@@ -10,7 +10,6 @@ import random
 import torch
 import torch.nn as nn
 import torch.optim as optim
-
 # ------------------ SETUP ------------------
 st.set_page_config(page_title="Product Recommendation", layout="centered")
 st.title("🔍 Surgical Tool Recommendation System")
