@@ -42,14 +42,14 @@ cursor.execute('''CREATE TABLE IF NOT EXISTS feedback (
 
 conn.commit()
 
-# ---------- LOAD DATA FROM DATABASE ----------
+# ---------- LOAD DATA ----------
 @st.cache_data(show_spinner=False)
 def load_data_fresh():
     user_df = pd.read_sql_query("SELECT * FROM users", conn)
     tools_df = pd.read_sql_query("SELECT * FROM tools", conn)
     return user_df, tools_df
 
-# ---------- FIND MATCH FUNCTION ----------
+# ---------- MATCH FUNCTION ----------
 def find_best_match(prod_name, choices, threshold=70):
     match, score = process.extractOne(prod_name.lower().strip(), choices)
     if score >= threshold:
@@ -68,7 +68,7 @@ def display_resized_image(image_url, max_width=300):
     except:
         st.write("🖼️ Image unavailable")
 
-# ---------- DATA PIPELINE FUNCTION ----------
+# ---------- DATA PIPELINE ----------
 def get_updated_data():
     df, tools_df = load_data_fresh()
     purchase_matrix = df.set_index('userID')['previousPurchases'].str.get_dummies(sep='|')
@@ -101,7 +101,6 @@ with tab1:
             user_vector = purchase_matrix.loc[selected_user]
             new_scores = weighted_scores[user_vector == 0]
 
-            # 🧠 Reinforcement: Adjust recommendation scores based on user feedback
             recommendation_scores = []
             for prod in new_scores.index:
                 cursor.execute("SELECT reward FROM feedback WHERE userID=? AND toolTitle=?", (selected_user, prod))
@@ -123,12 +122,20 @@ with tab1:
                         st.markdown(f"### [{prod}]({row['Title_URL']})")
                         display_resized_image(row['Image'])
 
-                        feedback_key = f"{selected_user}_{prod}"
-                        if st.button("👍 Mark as Useful", key=feedback_key):
-                            cursor.execute("INSERT OR REPLACE INTO feedback (userID, toolTitle, reward) VALUES (?, ?, ?)",
-                                           (selected_user, prod, 1))
-                            conn.commit()
-                            st.success(f"✅ Feedback recorded for '{prod}'!")
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            if st.button("👍 Mark as Useful", key=f"{selected_user}_{prod}_up"):
+                                cursor.execute("INSERT OR REPLACE INTO feedback (userID, toolTitle, reward) VALUES (?, ?, ?)",
+                                               (selected_user, prod, 1))
+                                conn.commit()
+                                st.success(f"✅ Positive feedback recorded for '{prod}'!")
+
+                        with col2:
+                            if st.button("👎 Not Useful", key=f"{selected_user}_{prod}_down"):
+                                cursor.execute("INSERT OR REPLACE INTO feedback (userID, toolTitle, reward) VALUES (?, ?, ?)",
+                                               (selected_user, prod, -1))
+                                conn.commit()
+                                st.warning(f"❌ Negative feedback recorded for '{prod}'!")
                     else:
                         st.write(f"- {prod} (No match found)")
     else:
