@@ -18,15 +18,9 @@ cursor = conn.cursor()
 # ---------- INIT DB TABLES ----------
 cursor.execute('''CREATE TABLE IF NOT EXISTS users (
     userID TEXT PRIMARY KEY,
-    previousPurchases TEXT
+    previousPurchases TEXT,
+    category TEXT
 )''')
-
-# Ensure 'category' column exists in 'users' table
-try:
-    cursor.execute("ALTER TABLE users ADD COLUMN category TEXT")
-    conn.commit()
-except sqlite3.OperationalError:
-    pass  # Column already exists
 
 cursor.execute('''CREATE TABLE IF NOT EXISTS tools (
     Title TEXT,
@@ -38,6 +32,14 @@ cursor.execute('''CREATE TABLE IF NOT EXISTS tools (
     Brand TEXT,
     Category TEXT
 )''')
+
+cursor.execute('''CREATE TABLE IF NOT EXISTS feedback (
+    userID TEXT,
+    toolTitle TEXT,
+    reward INTEGER,
+    PRIMARY KEY (userID, toolTitle)
+)''')
+
 conn.commit()
 
 # ---------- LOAD DATA FROM DATABASE ----------
@@ -98,18 +100,35 @@ with tab1:
             weighted_scores = purchase_matrix.loc[sim_scores.index].T.dot(sim_scores)
             user_vector = purchase_matrix.loc[selected_user]
             new_scores = weighted_scores[user_vector == 0]
-            top5 = new_scores.sort_values(ascending=False).head(5)
 
-            if top5.empty:
+            # 🧠 Reinforcement: Adjust recommendation scores based on user feedback
+            recommendation_scores = []
+            for prod in new_scores.index:
+                cursor.execute("SELECT reward FROM feedback WHERE userID=? AND toolTitle=?", (selected_user, prod))
+                result = cursor.fetchone()
+                reward = result[0] if result else 0
+                adjusted_score = new_scores[prod] + reward
+                recommendation_scores.append((prod, adjusted_score))
+
+            top5 = sorted(recommendation_scores, key=lambda x: x[1], reverse=True)[:5]
+
+            if not top5:
                 st.write("No new product recommendations available for this user.")
             else:
                 st.subheader("🎯 Top 5 Recommended Products:")
-                for prod in top5.index:
+                for prod, _ in top5:
                     best_match = find_best_match(prod, product_choices)
                     if best_match:
                         row = tools_df[tools_df['Title_clean'] == best_match].iloc[0]
                         st.markdown(f"### [{prod}]({row['Title_URL']})")
                         display_resized_image(row['Image'])
+
+                        feedback_key = f"{selected_user}_{prod}"
+                        if st.button("👍 Mark as Useful", key=feedback_key):
+                            cursor.execute("INSERT OR REPLACE INTO feedback (userID, toolTitle, reward) VALUES (?, ?, ?)",
+                                           (selected_user, prod, 1))
+                            conn.commit()
+                            st.success(f"✅ Feedback recorded for '{prod}'!")
                     else:
                         st.write(f"- {prod} (No match found)")
     else:
@@ -139,7 +158,6 @@ with tab2:
 # ========== TAB 3: CONTENT-BASED FILTERING ==========
 with tab3:
     st.write("## 🧠 Content-Based Filtering")
-
     tools_df = load_data_fresh()[1]
     tools_df['Title_clean'] = tools_df['Title'].str.lower().str.strip()
     selected_tool = st.selectbox("🔍 Select a Tool to Find Similar Ones", tools_df['Title'])
