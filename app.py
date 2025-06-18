@@ -6,10 +6,7 @@ from fuzzywuzzy import process
 import requests
 from PIL import Image
 from io import BytesIO
-import random
-import torch
-import torch.nn as nn
-import torch.optim as optim
+
 # ------------------ SETUP ------------------
 st.set_page_config(page_title="Product Recommendation", layout="centered")
 st.title("🔍 Surgical Tool Recommendation System")
@@ -34,6 +31,13 @@ cursor.execute('''CREATE TABLE IF NOT EXISTS tools (
     Use TEXT,
     Brand TEXT,
     Category TEXT
+)''')
+
+cursor.execute('''CREATE TABLE IF NOT EXISTS feedback (
+    userID TEXT,
+    toolTitle TEXT,
+    reward INTEGER,
+    PRIMARY KEY (userID, toolTitle)
 )''')
 
 conn.commit()
@@ -64,47 +68,6 @@ def display_resized_image(image_url, max_width=300):
     except:
         st.write("🖼️ Image unavailable")
 
-# ---------- DQN MODEL ----------
-class DQN(nn.Module):
-    def __init__(self, input_dim, output_dim):
-        super(DQN, self).__init__()
-        self.fc = nn.Sequential(
-            nn.Linear(input_dim, 128),
-            nn.ReLU(),
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Linear(64, output_dim)
-        )
-
-    def forward(self, x):
-        return self.fc(x)
-
-# ---------- RL FUNCTIONS (DQN) ----------
-dqn_model = DQN(input_dim=1, output_dim=1)
-optimizer = optim.Adam(dqn_model.parameters(), lr=0.001)
-criterion = nn.MSELoss()
-
-memory = []  # (state, action, reward)
-
-def dqn_recommendation(user_id, category, tools_df):
-    available_tools = tools_df[tools_df['Category'].str.lower().str.contains(category.lower())]['Title'].unique().tolist()
-    if not available_tools:
-        return None
-    state = torch.tensor([hash(user_id + category) % 1000], dtype=torch.float32).unsqueeze(0)
-    with torch.no_grad():
-        q_values = [dqn_model(state).item() for _ in available_tools]
-    max_index = q_values.index(max(q_values))
-    return available_tools[max_index]
-
-def update_dqn(user_id, tool, category, reward):
-    state = torch.tensor([hash(user_id + category) % 1000], dtype=torch.float32).unsqueeze(0)
-    target = torch.tensor([[reward]], dtype=torch.float32)
-    output = dqn_model(state)
-    loss = criterion(output, target)
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
-
 # ---------- DATA PIPELINE FUNCTION ----------
 def get_updated_data():
     df, tools_df = load_data_fresh()
@@ -118,29 +81,56 @@ def get_updated_data():
 # ---------- TABS ----------
 tab1, tab2, tab3 = st.tabs(["📊 Recommend Products", "➕ Add New User", "🧠 Content-Based Suggestions"])
 
-# ========== TAB 1: USER-BASED RL RECOMMENDATION ==========
+# ========== TAB 1: USER-BASED RECOMMENDATION ==========
 with tab1:
     df, tools_df, purchase_matrix, sim_df, product_choices = get_updated_data()
-    st.write("## 📌 RL-Based Product Recommendations")
+    st.write("## 📌 User-Based Product Recommendations")
     user_list = list(purchase_matrix.index)
     selected_user = st.selectbox("Select a User ID", user_list)
     custom_user_input = st.text_input("Or enter a User ID manually:", value=selected_user)
 
     if custom_user_input in purchase_matrix.index:
         selected_user = custom_user_input
-        category = df[df['userID'] == selected_user]['category'].values[0]
-        recommended_tool = dqn_recommendation(selected_user, category, tools_df)
+        sim_scores = sim_df[selected_user].drop(selected_user)
+        sim_scores = sim_scores[sim_scores > 0]
 
-        if recommended_tool:
-            row = tools_df[tools_df['Title'] == recommended_tool].iloc[0]
-            st.markdown(f"### [{row['Title']}]({row['Title_URL']})")
-            display_resized_image(row['Image'])
-
-            if st.button("👍 Mark as Useful", key=f"{selected_user}_{recommended_tool}"):
-                update_dqn(selected_user, recommended_tool, category, reward=1)
-                st.success("Feedback updated with reward = 1")
+        if sim_scores.empty:
+            st.write("No similar users found for this user.")
         else:
-            st.warning("No recommendation available.")
+            weighted_scores = purchase_matrix.loc[sim_scores.index].T.dot(sim_scores)
+            user_vector = purchase_matrix.loc[selected_user]
+            new_scores = weighted_scores[user_vector == 0]
+
+            # 🧠 Reinforcement: Adjust recommendation scores based on user feedback
+            recommendation_scores = []
+            for prod in new_scores.index:
+                cursor.execute("SELECT reward FROM feedback WHERE userID=? AND toolTitle=?", (selected_user, prod))
+                result = cursor.fetchone()
+                reward = result[0] if result else 0
+                adjusted_score = new_scores[prod] + reward
+                recommendation_scores.append((prod, adjusted_score))
+
+            top5 = sorted(recommendation_scores, key=lambda x: x[1], reverse=True)[:5]
+
+            if not top5:
+                st.write("No new product recommendations available for this user.")
+            else:
+                st.subheader("🎯 Top 5 Recommended Products:")
+                for prod, _ in top5:
+                    best_match = find_best_match(prod, product_choices)
+                    if best_match:
+                        row = tools_df[tools_df['Title_clean'] == best_match].iloc[0]
+                        st.markdown(f"### [{prod}]({row['Title_URL']})")
+                        display_resized_image(row['Image'])
+
+                        feedback_key = f"{selected_user}_{prod}"
+                        if st.button("👍 Mark as Useful", key=feedback_key):
+                            cursor.execute("INSERT OR REPLACE INTO feedback (userID, toolTitle, reward) VALUES (?, ?, ?)",
+                                           (selected_user, prod, 1))
+                            conn.commit()
+                            st.success(f"✅ Feedback recorded for '{prod}'!")
+                    else:
+                        st.write(f"- {prod} (No match found)")
     else:
         st.warning("User ID not found in the dataset.")
 
@@ -168,7 +158,6 @@ with tab2:
 # ========== TAB 3: CONTENT-BASED FILTERING ==========
 with tab3:
     st.write("## 🧠 Content-Based Filtering")
-
     tools_df = load_data_fresh()[1]
     tools_df['Title_clean'] = tools_df['Title'].str.lower().str.strip()
     selected_tool = st.selectbox("🔍 Select a Tool to Find Similar Ones", tools_df['Title'])
