@@ -5,3 +5,11 @@ scikit-learn
 fuzzywuzzy[speedup]
 openpyxl
 torch
+streamlit
+pandas
+scikit-learn
+fuzzywuzzy
+python-Levenshtein
+requests
+Pillow
+torch
