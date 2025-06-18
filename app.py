@@ -223,11 +223,3 @@ with tab4:
 
         feedback_chart = summary.groupby(['toolTitle', 'Feedback Type']).size().unstack(fill_value=0)
         st.bar_chart(feedback_chart)
-
-        st.write("### ⚠️ Reset Feedback (Danger Zone)")
-        confirm_delete = st.checkbox("⚠️ Confirm deletion of all feedback data")
-        if st.button("🗑️ Clear All Feedback Entries") and confirm_delete:
-            cursor.execute("DELETE FROM feedback")
-            conn.commit()
-            st.success("✅ All feedback entries have been cleared.")
-            st.cache_data.clear()
