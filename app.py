@@ -128,12 +128,22 @@ with tab1:
                         st.markdown(f"### [{prod}]({row['Title_URL']})")
                         display_resized_image(row['Image'])
 
-                        feedback_key = f"{selected_user}_{prod}"
-                        if st.button("👍 Mark as Useful", key=feedback_key):
-                            cursor.execute("INSERT OR REPLACE INTO feedback (userID, toolTitle, reward) VALUES (?, ?, ?)",
-                                           (selected_user, prod, 1))
-                            conn.commit()
-                            st.success(f"✅ Feedback recorded for '{prod}'!")
+                        feedback_key_pos = f"{selected_user}_{prod}_pos"
+                        feedback_key_neg = f"{selected_user}_{prod}_neg"
+
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            if st.button("👍 Mark as Useful", key=feedback_key_pos):
+                                cursor.execute("INSERT OR REPLACE INTO feedback (userID, toolTitle, reward) VALUES (?, ?, ?)",
+                                               (selected_user, prod, 1))
+                                conn.commit()
+                                st.success(f"✅ Positive feedback recorded for '{prod}'!")
+                        with col2:
+                            if st.button("👎 Mark as Not Useful", key=feedback_key_neg):
+                                cursor.execute("INSERT OR REPLACE INTO feedback (userID, toolTitle, reward) VALUES (?, ?, ?)",
+                                               (selected_user, prod, -1))
+                                conn.commit()
+                                st.warning(f"❌ Negative feedback recorded for '{prod}'!")
                     else:
                         st.write(f"- {prod} (No match found)")
     else:
@@ -206,3 +216,18 @@ with tab4:
         st.info("No feedback data available yet.")
     else:
         st.dataframe(feedback_df)
+
+        st.write("### 📊 Feedback Summary by Tool")
+        summary = feedback_df.groupby('toolTitle')['reward'].sum().reset_index()
+        summary['Feedback Type'] = summary['reward'].apply(lambda x: 'Positive' if x > 0 else 'Negative' if x < 0 else 'Neutral')
+
+        feedback_chart = summary.groupby(['toolTitle', 'Feedback Type']).size().unstack(fill_value=0)
+        st.bar_chart(feedback_chart)
+
+        st.write("### ⚠️ Reset Feedback (Danger Zone)")
+        if st.button("🗑️ Clear All Feedback Entries"):
+            if st.confirm("Are you sure you want to delete all feedback data? This action cannot be undone."):
+                cursor.execute("DELETE FROM feedback")
+                conn.commit()
+                st.success("✅ All feedback entries have been cleared.")
+                st.cache_data.clear()
