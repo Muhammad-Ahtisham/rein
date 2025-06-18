@@ -225,9 +225,9 @@ with tab4:
         st.bar_chart(feedback_chart)
 
         st.write("### ⚠️ Reset Feedback (Danger Zone)")
-        if st.button("🗑️ Clear All Feedback Entries"):
-            if st.confirm("Are you sure you want to delete all feedback data? This action cannot be undone."):
-                cursor.execute("DELETE FROM feedback")
-                conn.commit()
-                st.success("✅ All feedback entries have been cleared.")
-                st.cache_data.clear()
+        confirm_delete = st.checkbox("⚠️ Confirm deletion of all feedback data")
+        if st.button("🗑️ Clear All Feedback Entries") and confirm_delete:
+            cursor.execute("DELETE FROM feedback")
+            conn.commit()
+            st.success("✅ All feedback entries have been cleared.")
+            st.cache_data.clear()
