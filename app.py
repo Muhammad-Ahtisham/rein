@@ -242,12 +242,12 @@ with tab1:
                         st.write(f"- {prod} (No match found)")
     else:
         st.warning("User ID not found in the dataset.")
-
 # ========== TAB 2: Add New User ==========
 with tab2:
     st.write("## ➕ Create a New User Profile")
     new_user_id = st.text_input("🔹 Enter New User ID")
     new_user_purchases = st.text_input("🔹 Purchased tools (use '|' to separate multiple items):")
+
     if st.button("✅ Add User and Generate Recommendations"):
         if new_user_id.strip() == "" or new_user_purchases.strip() == "":
             st.warning("Please enter User ID, purchases.")
@@ -262,7 +262,6 @@ with tab2:
                         (
                             new_user_id.strip(),
                             new_user_purchases.strip()
-                            
                         )
                     )
                     conn.commit()
