@@ -5,6 +5,11 @@ from sklearn.metrics.pairwise import cosine_similarity
 from fuzzywuzzy import process
 import requests
 from PIL import Image
+from collections import defaultdict
+import numpy as np
+import pickle
+import os
+import random
 from io import BytesIO
 from collections import defaultdict
 import numpy as np
@@ -35,6 +40,36 @@ if 'category' not in columns:
         cursor.execute("INSERT INTO users (userID, previousPurchases, category) VALUES (?, ?, ?)",
                        (row['userID'], row['previousPurchases'], row.get('category', '')))
     conn.commit()
+
+# ---------- Q-LEARNING SETUP ----------
+q_table = defaultdict(lambda: defaultdict(float))
+alpha = 0.1  # learning rate
+gamma = 0.9  # discount factor
+epsilon = 0.2  # exploration rate
+Q_TABLE_PATH = "q_table.pkl"
+
+# ---------- Q-LEARNING FUNCTIONS ----------
+def update_q_value(user_id, tool_title, reward):
+    state = user_id
+    action = tool_title
+    current_q = q_table[state][action]
+    next_max = max(q_table[state].values()) if q_table[state] else 0
+    new_q = current_q + alpha * (reward + gamma * next_max - current_q)
+    q_table[state][action] = new_q
+    save_q_table()
+
+def save_q_table():
+    with open(Q_TABLE_PATH, "wb") as f:
+        pickle.dump(dict(q_table), f)
+
+def load_q_table():
+    global q_table
+    if os.path.exists(Q_TABLE_PATH):
+        with open(Q_TABLE_PATH, "rb") as f:
+            data = pickle.load(f)
+            q_table = defaultdict(lambda: defaultdict(float), data)
+
+load_q_table()
 
 # ---------- INIT DB TABLES ----------
 cursor.execute('''CREATE TABLE IF NOT EXISTS users (
@@ -106,6 +141,7 @@ def retrain_model():
     purchase_matrix = df.set_index('userID')['previousPurchases'].str.get_dummies(sep='|')
     sim_matrix = cosine_similarity(purchase_matrix.values)
     sim_df = pd.DataFrame(sim_matrix, index=purchase_matrix.index, columns=purchase_matrix.index)
+    # update global state if needed here
     return df, tools_df, purchase_matrix, sim_df
 
 def find_best_match(prod_name, choices, threshold=70):
