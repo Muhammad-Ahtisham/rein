@@ -34,11 +34,10 @@ if 'category' not in columns:
     cursor.execute('''CREATE TABLE users (
         userID TEXT PRIMARY KEY,
         previousPurchases TEXT,
-        category TEXT
+        
     )''')
     for _, row in existing_data.iterrows():
-        cursor.execute("INSERT INTO users (userID, previousPurchases, category) VALUES (?, ?, ?)",
-                       (row['userID'], row['previousPurchases'], row.get('category', '')))
+        cursor.execute("INSERT INTO users (userID, previousPurchases) VALUES (?, ?)", (new_user_id.strip(), new_user_purchases.strip()))))
     conn.commit()
 
 # ---------- Q-LEARNING SETUP ----------
@@ -249,10 +248,9 @@ with tab2:
     st.write("## ➕ Create a New User Profile")
     new_user_id = st.text_input("🔹 Enter New User ID")
     new_user_purchases = st.text_input("🔹 Purchased tools (use '|' to separate multiple items):")
-    new_user_category = st.text_input("🔹 Enter Tool Category (e.g., Cutting, Grasping)")
 
     if st.button("✅ Add User and Generate Recommendations"):
-        if new_user_id.strip() == "" or new_user_purchases.strip() == "" or new_user_category.strip() == "":
+        if new_user_id.strip() == "" or new_user_purchases.strip() == "":
             st.warning("Please enter User ID, purchases, and category.")
         else:
             cursor.execute("SELECT COUNT(*) FROM users WHERE userID=?", (new_user_id,))
