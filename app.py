@@ -16,7 +16,6 @@ import numpy as np
 import pickle
 import os
 import random
-
 # ------------------ SETUP ------------------
 st.set_page_config(page_title="Product Recommendation", layout="centered")
 st.title("🔍 Surgical Tool Recommendation System")
