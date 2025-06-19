@@ -6,6 +6,11 @@ from fuzzywuzzy import process
 import requests
 from PIL import Image
 from io import BytesIO
+from collections import defaultdict
+import numpy as np
+import pickle
+import os
+import random
 
 # ------------------ SETUP ------------------
 st.set_page_config(page_title="Product Recommendation", layout="centered")
@@ -42,21 +47,57 @@ cursor.execute('''CREATE TABLE IF NOT EXISTS feedback (
 
 conn.commit()
 
-# ---------- LOAD DATA FROM DATABASE ----------
+# ---------- Q-LEARNING SETUP ----------
+q_table = defaultdict(lambda: defaultdict(float))
+alpha = 0.1  # learning rate
+gamma = 0.9  # discount factor
+epsilon = 0.2  # exploration rate
+Q_TABLE_PATH = "q_table.pkl"
+
+# ---------- Q-LEARNING FUNCTIONS ----------
+def update_q_value(user_id, tool_title, reward):
+    state = user_id
+    action = tool_title
+    current_q = q_table[state][action]
+    next_max = max(q_table[state].values()) if q_table[state] else 0
+    new_q = current_q + alpha * (reward + gamma * next_max - current_q)
+    q_table[state][action] = new_q
+    save_q_table()
+
+def save_q_table():
+    with open(Q_TABLE_PATH, "wb") as f:
+        pickle.dump(dict(q_table), f)
+
+def load_q_table():
+    global q_table
+    if os.path.exists(Q_TABLE_PATH):
+        with open(Q_TABLE_PATH, "rb") as f:
+            data = pickle.load(f)
+            q_table = defaultdict(lambda: defaultdict(float), data)
+
+load_q_table()
+
+# ---------- LOAD DATA ----------
 @st.cache_data(show_spinner=False)
 def load_data_fresh():
     user_df = pd.read_sql_query("SELECT * FROM users", conn)
     tools_df = pd.read_sql_query("SELECT * FROM tools", conn)
     return user_df, tools_df
 
-# ---------- FIND MATCH FUNCTION ----------
+def retrain_model():
+    st.cache_data.clear()
+    df, tools_df = load_data_fresh()
+    purchase_matrix = df.set_index('userID')['previousPurchases'].str.get_dummies(sep='|')
+    sim_matrix = cosine_similarity(purchase_matrix.values)
+    sim_df = pd.DataFrame(sim_matrix, index=purchase_matrix.index, columns=purchase_matrix.index)
+    return df, tools_df, purchase_matrix, sim_df
+
 def find_best_match(prod_name, choices, threshold=70):
     match, score = process.extractOne(prod_name.lower().strip(), choices)
     if score >= threshold:
         return match
     return None
 
-# ---------- IMAGE DISPLAY ----------
 def display_resized_image(image_url, max_width=300):
     try:
         response = requests.get(image_url)
@@ -68,27 +109,15 @@ def display_resized_image(image_url, max_width=300):
     except:
         st.write("🖼️ Image unavailable")
 
-# ---------- DATA PIPELINE FUNCTION ----------
-def get_updated_data():
-    df, tools_df = load_data_fresh()
-    purchase_matrix = df.set_index('userID')['previousPurchases'].str.get_dummies(sep='|')
-    sim_matrix = cosine_similarity(purchase_matrix.values)
-    sim_df = pd.DataFrame(sim_matrix, index=purchase_matrix.index, columns=purchase_matrix.index)
+# ---------- TABS ----------
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Recommend Products", "➕ Add New User", "🧠 Content-Based Suggestions", "📋 Feedback History"])
+
+# ========== TAB 1 ==========
+with tab1:
+    df, tools_df, purchase_matrix, sim_df = retrain_model()
     tools_df['Title_clean'] = tools_df['Title'].str.lower().str.strip()
     product_choices = tools_df['Title_clean'].tolist()
-    return df, tools_df, purchase_matrix, sim_df, product_choices
 
-# ---------- TABS ----------
-tab1, tab2, tab3, tab4 = st.tabs([
-    "📊 Recommend Products", 
-    "➕ Add New User", 
-    "🧠 Content-Based Suggestions", 
-    "📋 Feedback History"
-])
-
-# ========== TAB 1: USER-BASED RECOMMENDATION ==========
-with tab1:
-    df, tools_df, purchase_matrix, sim_df, product_choices = get_updated_data()
     st.write("## 📌 User-Based Product Recommendations")
     user_list = list(purchase_matrix.index)
     selected_user = st.selectbox("Select a User ID", user_list)
@@ -106,19 +135,31 @@ with tab1:
             user_vector = purchase_matrix.loc[selected_user]
             new_scores = weighted_scores[user_vector == 0]
 
-            # 🧠 Reinforcement: Adjust recommendation scores based on user feedback
-            recommendation_scores = []
-            for prod in new_scores.index:
-                cursor.execute("SELECT reward FROM feedback WHERE userID=? AND toolTitle=?", (selected_user, prod))
-                result = cursor.fetchone()
-                reward = result[0] if result else 0
-                adjusted_score = new_scores[prod] + reward
-                recommendation_scores.append((prod, adjusted_score))
+            # Q-learning enhanced recommendations
+            user_qs = q_table.get(selected_user, {})
+            q_ranked_tools = sorted(user_qs.items(), key=lambda x: x[1], reverse=True)
 
-            top5 = sorted(recommendation_scores, key=lambda x: x[1], reverse=True)[:5]
+            if len(q_ranked_tools) >= 5:
+                top5 = q_ranked_tools[:5]
+            else:
+                # Exploration
+                if new_scores.empty:
+                    top5 = []
+                elif random.random() < epsilon:
+                    sampled = random.sample(list(new_scores.index), min(5, len(new_scores)))
+                    top5 = [(t, new_scores[t]) for t in sampled]
+                else:
+                    recommendation_scores = []
+                    for prod in new_scores.index:
+                        cursor.execute("SELECT reward FROM feedback WHERE userID=? AND toolTitle=?", (selected_user, prod))
+                        result = cursor.fetchone()
+                        reward = result[0] if result else 0
+                        adjusted_score = new_scores[prod] + reward
+                        recommendation_scores.append((prod, adjusted_score))
+                    top5 = sorted(recommendation_scores, key=lambda x: x[1], reverse=True)[:5]
 
             if not top5:
-                st.write("No new product recommendations available for this user.")
+                st.write("No product recommendations available.")
             else:
                 st.subheader("🎯 Top 5 Recommended Products:")
                 for prod, _ in top5:
@@ -137,19 +178,21 @@ with tab1:
                                 cursor.execute("INSERT OR REPLACE INTO feedback (userID, toolTitle, reward) VALUES (?, ?, ?)",
                                                (selected_user, prod, 1))
                                 conn.commit()
+                                update_q_value(selected_user, prod, 1)
                                 st.success(f"✅ Positive feedback recorded for '{prod}'!")
                         with col2:
                             if st.button("👎 Mark as Not Useful", key=feedback_key_neg):
                                 cursor.execute("INSERT OR REPLACE INTO feedback (userID, toolTitle, reward) VALUES (?, ?, ?)",
                                                (selected_user, prod, -1))
                                 conn.commit()
+                                update_q_value(selected_user, prod, -1)
                                 st.warning(f"❌ Negative feedback recorded for '{prod}'!")
                     else:
                         st.write(f"- {prod} (No match found)")
     else:
         st.warning("User ID not found in the dataset.")
 
-# ========== TAB 2: ADD NEW USER ==========
+# ========== TAB 2: Add New User ==========
 with tab2:
     st.write("## ➕ Create a New User Profile")
     new_user_id = st.text_input("🔹 Enter New User ID")
@@ -168,9 +211,9 @@ with tab2:
                                (new_user_id.strip(), new_user_purchases.strip(), new_user_category.strip()))
                 conn.commit()
                 st.success(f"User '{new_user_id}' added successfully!")
-                st.cache_data.clear()
+                retrain_model()
 
-# ========== TAB 3: CONTENT-BASED FILTERING ==========
+# ========== TAB 3: Content-Based Filtering ==========
 with tab3:
     st.write("## 🧠 Content-Based Filtering")
     tools_df = load_data_fresh()[1]
@@ -208,7 +251,7 @@ with tab3:
                 st.markdown(f"### [{row['Title']}]({row['Title_URL']})")
                 display_resized_image(row['Image'])
 
-# ========== TAB 4: FEEDBACK HISTORY ==========
+# ========== TAB 4: Feedback History ==========
 with tab4:
     st.write("## 📋 User Feedback History")
     feedback_df = pd.read_sql_query("SELECT * FROM feedback", conn)
@@ -216,10 +259,8 @@ with tab4:
         st.info("No feedback data available yet.")
     else:
         st.dataframe(feedback_df)
-
         st.write("### 📊 Feedback Summary by Tool")
         summary = feedback_df.groupby('toolTitle')['reward'].sum().reset_index()
         summary['Feedback Type'] = summary['reward'].apply(lambda x: 'Positive' if x > 0 else 'Negative' if x < 0 else 'Neutral')
-
         feedback_chart = summary.groupby(['toolTitle', 'Feedback Type']).size().unstack(fill_value=0)
         st.bar_chart(feedback_chart)
