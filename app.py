@@ -21,11 +21,17 @@ conn = sqlite3.connect("recommendation.db", check_same_thread=False)
 cursor = conn.cursor()
 
 # ---------- FIX SCHEMA IF NEEDED ----------
-try:
-    cursor.execute("ALTER TABLE users ADD COLUMN category TEXT")
+# Drop and recreate the users table if it lacks the 'category' column
+cursor.execute("PRAGMA table_info(users)")
+columns = [col[1] for col in cursor.fetchall()]
+if 'category' not in columns:
+    cursor.execute("DROP TABLE IF EXISTS users")
+    cursor.execute('''CREATE TABLE IF NOT EXISTS users (
+        userID TEXT PRIMARY KEY,
+        previousPurchases TEXT,
+        category TEXT
+    )''')
     conn.commit()
-except sqlite3.OperationalError:
-    pass  # Column already exists or other operational issues
 
 # ---------- INIT DB TABLES ----------
 cursor.execute('''CREATE TABLE IF NOT EXISTS users (
