@@ -20,6 +20,13 @@ st.title("🔍 Surgical Tool Recommendation System")
 conn = sqlite3.connect("recommendation.db", check_same_thread=False)
 cursor = conn.cursor()
 
+# ---------- FIX SCHEMA IF NEEDED ----------
+try:
+    cursor.execute("ALTER TABLE users ADD COLUMN category TEXT")
+    conn.commit()
+except sqlite3.OperationalError:
+    pass  # Column already exists or other operational issues
+
 # ---------- INIT DB TABLES ----------
 cursor.execute('''CREATE TABLE IF NOT EXISTS users (
     userID TEXT PRIMARY KEY,
