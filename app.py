@@ -74,7 +74,7 @@ load_q_table()
 cursor.execute('''CREATE TABLE IF NOT EXISTS users (
     userID TEXT PRIMARY KEY,
     previousPurchases TEXT,
-    category TEXT
+    
 )''')
 
 cursor.execute('''CREATE TABLE IF NOT EXISTS tools (
@@ -251,7 +251,7 @@ with tab2:
 
     if st.button("✅ Add User and Generate Recommendations"):
         if new_user_id.strip() == "" or new_user_purchases.strip() == "":
-            st.warning("Please enter User ID, purchases, and category.")
+            st.warning("Please enter User ID, purchases.")
         else:
             cursor.execute("SELECT COUNT(*) FROM users WHERE userID=?", (new_user_id,))
             if cursor.fetchone()[0] > 0:
@@ -259,11 +259,11 @@ with tab2:
             else:
                 try:
                     cursor.execute(
-                        "INSERT INTO users (userID, previousPurchases, category) VALUES (?, ?, ?)",
+                        "INSERT INTO users (userID, previousPurchases) VALUES (?, ?)",
                         (
                             new_user_id.strip(),
-                            new_user_purchases.strip(),
-                            new_user_category.strip()
+                            new_user_purchases.strip()
+                            
                         )
                     )
                     conn.commit()
