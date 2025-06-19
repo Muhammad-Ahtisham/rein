@@ -21,16 +21,19 @@ conn = sqlite3.connect("recommendation.db", check_same_thread=False)
 cursor = conn.cursor()
 
 # ---------- FIX SCHEMA IF NEEDED ----------
-# Drop and recreate the users table if it lacks the 'category' column
 cursor.execute("PRAGMA table_info(users)")
 columns = [col[1] for col in cursor.fetchall()]
 if 'category' not in columns:
+    existing_data = pd.read_sql_query("SELECT * FROM users", conn)
     cursor.execute("DROP TABLE IF EXISTS users")
-    cursor.execute('''CREATE TABLE IF NOT EXISTS users (
+    cursor.execute('''CREATE TABLE users (
         userID TEXT PRIMARY KEY,
         previousPurchases TEXT,
         category TEXT
     )''')
+    for _, row in existing_data.iterrows():
+        cursor.execute("INSERT INTO users (userID, previousPurchases, category) VALUES (?, ?, ?)",
+                       (row['userID'], row['previousPurchases'], row.get('category', '')))
     conn.commit()
 
 # ---------- INIT DB TABLES ----------
